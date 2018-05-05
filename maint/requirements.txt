@@ -4,7 +4,8 @@ requests>=2.9
 GitPython>=2.0
 
 # Linting for our Python code
-flake8>=3.0
+# flake8 3.5.0 is broken (AttributeError: 'Call' object has no attribute 'id')
+flake8==3.0.4
 pep8>=1.7
 pep8-naming>=0.4
 flake8-quotes>=0.8
