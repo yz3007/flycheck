@@ -2907,11 +2907,13 @@ variables of Flycheck."
 ;;; Errors from syntax checks
 (cl-defstruct (flycheck-error
                (:constructor flycheck-error-new)
-               (:constructor flycheck-error-new-at (line column
-                                                         &optional level message
-                                                         &key checker id group
-                                                         (filename (buffer-file-name))
-                                                         (buffer (current-buffer)))))
+               (:constructor flycheck-error-new-at
+                             (line column
+                                   &optional level message
+                                   &key checker id group
+                                   (filename (buffer-file-name))
+                                   (buffer (current-buffer))
+                                   (index (flycheck-error-next-index)))))
   "Structure representing an error reported by a syntax checker.
 Slots:
 
@@ -2957,7 +2959,14 @@ Slots:
      in order to be able to present them to the user.
 
      See `flycheck-related-errors`."
-  buffer checker filename line column message level id group)
+  buffer checker filename line column message level id group index)
+
+(defvar-local flycheck-error--current-index 0)
+
+(defun flycheck-error-next-index ()
+  (prog1
+      flycheck-error--current-index
+    (cl-incf flycheck-error--current-index)))
 
 (defmacro flycheck-error-with-buffer (err &rest forms)
   "Switch to the buffer of ERR and evaluate FORMS.
@@ -4448,7 +4457,13 @@ non-nil."
     (flycheck-cancel-error-display-error-at-point-timer)
     (when flycheck-mode
       (-when-let (errors (flycheck-overlay-errors-at (point)))
-        (flycheck-display-errors errors)))))
+        ;; The order of errors returned from overlays is not stable, so we sort
+        ;; them again using the internal index to guarantee errors are always
+        ;; displayed in the same order.
+        (flycheck-display-errors
+         (sort errors (lambda (err1 err2)
+                        (< (flycheck-error-index err1)
+                           (flycheck-error-index err2)))))))))
 
 (defun flycheck-display-error-at-point-soon ()
   "Display the first error message at point in minibuffer delayed."
