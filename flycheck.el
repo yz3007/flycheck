@@ -2072,11 +2072,14 @@ into the verification results."
   (insert-button (symbol-name checker)
                  'type 'help-flycheck-checker-doc
                  'help-args (list checker))
-  (when (with-current-buffer buffer (flycheck-disabled-checker-p checker))
+  (when (buffer-local-value (flycheck-disabled-checker-p checker) buffer)
     (insert (propertize " (disabled)" 'face '(bold error))))
+  (when (eq checker (buffer-local-value 'flycheck-checker buffer))
+    (insert (propertize "(explicitly selected)" 'face 'bold)))
   (princ "\n")
   (let ((results (with-current-buffer buffer
-                   (flycheck-verify-generic-checker checker))))
+                   (append (flycheck-verify-generic-checker checker)
+                           (flycheck--verify-checker-chain checker)))))
     (when with-mm
       (with-current-buffer buffer
         (let ((message-and-face
@@ -2101,9 +2104,42 @@ into the verification results."
         (princ (make-string (- message-column (current-column)) ?\ ))
         (let ((message (flycheck-verification-result-message result))
               (face (flycheck-verification-result-face result)))
-          (insert (propertize message 'face face)))
+          ;; If face is nil, using propertize erases the face already contained
+          ;; by the message.  We don't want that, since this would remove the
+          ;; button face from the checker chain result.
+          (if face
+              (insert (propertize message 'face face))
+            (insert message)))
         (princ "\n"))))
   (princ "\n"))
+
+(defun flycheck-checker-chain (checker)
+  "Return the chain of checkers following CHECKER.
+
+The return value is a list of checkers, not including CHECKER."
+  (let ((chain))
+    (while (setq checker (flycheck-get-next-checker-for-buffer checker))
+      (push checker chain))
+    (nreverse chain)))
+
+(defun flycheck--verify-checker-chain (checker)
+  "Return a verification result for the checker chain starting from CHECKER."
+  (-when-let (chain (flycheck-checker-chain checker))
+    (list
+     (flycheck-verification-result-new
+      :label "next checkers"
+      ;; We use `insert-text-button' to preserve the button properties in
+      ;; the string
+      :message (string-join
+                (split-string
+                 (with-temp-buffer
+                   (dolist (checker chain)
+                     (insert-text-button (symbol-name checker)
+                                         'type 'help-flycheck-checker-doc
+                                         'help-args (list checker))
+                     (insert " "))
+                   (buffer-string)))
+                ", ")))))
 
 (defun flycheck--verify-print-header (desc buffer)
   "Print a title with DESC for BUFFER in the current buffer.
@@ -2121,7 +2157,7 @@ buffer."
     (insert-button (symbol-name mode)
                    'type 'help-function
                    'help-args (list mode)))
-  (princ ":\n\n"))
+  (princ ".\n\n"))
 
 (defun flycheck--verify-print-footer (buffer)
   "Print a footer for BUFFER in the current buffer.
@@ -2187,34 +2223,46 @@ Display a new buffer listing all syntax checkers that could be
 applicable in the current buffer.  For each syntax checkers,
 possible problems are shown."
   (interactive)
+  ;; Save to make sure checkers that only work on saved buffers will pass the
+  ;; verification
   (when (and (buffer-file-name) (buffer-modified-p))
-    ;; Save the buffer
     (save-buffer))
 
-  (let ((buffer (current-buffer))
-        ;; Get all checkers that support the current major mode
-        (checkers (seq-filter #'flycheck-checker-supports-major-mode-p
-                              flycheck-checkers))
-        (help-buffer (get-buffer-create " *Flycheck checkers*")))
+  (let* ((buffer (current-buffer))
+         (first-checker (flycheck-get-checker-for-buffer))
+         (checker-chain (when first-checker
+                          (cons first-checker
+                                (flycheck-checker-chain first-checker))))
+         (other-checkers
+          (seq-difference (seq-filter #'flycheck-checker-supports-major-mode-p
+                                      flycheck-checkers)
+                          checker-chain))
+         (help-buffer (get-buffer-create " *Flycheck checkers*")))
 
-    ;; Now print all applicable checkers
+    ;; Print all applicable checkers for this buffer
     (with-help-window help-buffer
       (with-current-buffer standard-output
         (flycheck--verify-print-header "Syntax checkers for buffer " buffer)
-        (unless checkers
-          (insert (propertize
-                   "There are no syntax checkers for this buffer!\n\n"
-                   'face '(bold error))))
-        (dolist (checker checkers)
-          (flycheck--verify-princ-checker checker buffer))
 
-        (-when-let (selected-checker
-                    (buffer-local-value 'flycheck-checker buffer))
-          (insert
-           (propertize
-            "The following checker is explicitly selected for this buffer:\n\n"
-            'face 'bold))
-          (flycheck--verify-princ-checker selected-checker buffer 'with-mm))
+        ;; First display the checkers that will run for this buffer
+        (when checker-chain
+            (progn
+              (princ "Enabled checkers:\n\n")
+              (dolist (checker checker-chain)
+                (flycheck--verify-princ-checker checker buffer))))
+
+        ;; Then display other checkers
+        (when other-checkers
+          (progn
+            (princ "Available checkers:\n\n")
+            (dolist (checker other-checkers)
+              (flycheck--verify-princ-checker checker buffer))))
+
+        ;; If we have no checkers at all, that's worth mentioning
+        (when (and (not checker-chain) (not other-checkers))
+          (insert (propertize
+                   "No checkers are available for this buffer.\n\n"
+                   'face '(bold error))))
 
         (let ((unregistered-checkers
                (seq-difference (flycheck-defined-checkers) flycheck-checkers)))
