@@ -845,6 +845,12 @@ This variable is a normal hook.  See Info node `(elisp)Hooks'."
   :package-version '(flycheck . "0.15")
   :group 'flycheck-faces)
 
+(defface flycheck-verify-enable-checker
+  '((t :box (:style released-button)))
+  "Face for the 'enable now' button in the verify setup buffer."
+  :group 'flycheck-faces
+  :package-version '(flycheck . "32"))
+
 (defvar flycheck-command-map
   (let ((map (make-sparse-keymap)))
     (define-key map "c"         #'flycheck-buffer)
@@ -2033,6 +2039,14 @@ Slots:
      You can either use a face symbol, or a list of face symbols."
   label message face)
 
+(define-button-type 'flycheck-checker-enable
+  :supertype 'help-xref
+  'help-function (lambda (buffer checker)
+                   (with-current-buffer buffer
+                     (flycheck-disable-checker checker 'enable)))
+  'help-echo "mouse-2, RET: enable Flycheck checker"
+  'face 'flycheck-verify-enable-checker)
+
 (defun flycheck-verify-generic-checker (checker)
   "Verify a generic CHECKER in the current buffer.
 
@@ -2045,8 +2059,19 @@ Return a list of `flycheck-verification-result' objects."
       (let ((result (funcall enabled)))
         (push (flycheck-verification-result-new
                :label "may enable"
-               :message (if result "yes" "Automatically disabled!")
-               :face (if result 'success '(bold warning)))
+               :message
+               (if result
+                   (propertize "yes" 'face 'success)
+                 (format "%s %s"
+                         (propertize "Automatically disabled!"
+                                     'face '(bold warning))
+                         (let ((buffer (current-buffer)))
+                           (with-temp-buffer
+                             (insert-text-button
+                              "enable"
+                              'type 'flycheck-checker-enable
+                              'help-args (list buffer checker))
+                             (buffer-string))))))
               results)))
     (when predicate
       (let ((result (funcall predicate)))
@@ -2246,10 +2271,10 @@ possible problems are shown."
 
         ;; First display the checkers that will run for this buffer
         (when checker-chain
-            (progn
-              (princ "Enabled checkers:\n\n")
-              (dolist (checker checker-chain)
-                (flycheck--verify-princ-checker checker buffer))))
+          (progn
+            (princ "Enabled checkers:\n\n")
+            (dolist (checker checker-chain)
+              (flycheck--verify-princ-checker checker buffer))))
 
         ;; Then display other checkers
         (when other-checkers
